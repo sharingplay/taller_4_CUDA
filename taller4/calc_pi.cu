@@ -1,100 +1,111 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
 
-#define BLOCK_SIZE 256
+#define ITERATIONS 100000000
+#define BLOCK_SIZE 1024
 
-__global__ void cuda_monte_carlo(int* count, curandState* state, dim3 blockDim, dim3 gridDim, int blockIdx_x) {
-    __shared__ int s_counts[BLOCK_SIZE];
+__global__ void calculate_pi(float* count, curandState* states)
+{
+    __shared__ float partial_count[BLOCK_SIZE];
+    float x, y;
     int tid = threadIdx.x;
-    int bid = blockIdx_x;
-    int idx = bid * blockDim.x + tid;
-    int s_idx = tid;
-
-    curand_init(clock() + idx, idx, 0, &state[idx]);
-
-    float x, y, r;
-    int s_count = 0;
-    for (int i = 0; i < blockDim.x; i++) {
-        x = curand_uniform(&state[idx]);
-        y = curand_uniform(&state[idx]);
-        r = x * x + y * y;
-        s_count += (r <= 1.0f);
-    }
-    s_counts[s_idx] = s_count;
-
-    cudaDeviceSynchronize();
-
-    if (tid == 0) {
-        int block_count = 0;
-        for (int i = 0; i < blockDim.x; i++) {
-            block_count += s_counts[i];
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    curand_init(clock64(), index, 0, &states[index]);
+    partial_count[tid] = 0.0f;
+    for (int i = threadIdx.x; i < ITERATIONS; i += blockDim.x * gridDim.x)
+    {
+        x = curand_uniform(&states[index]);
+        y = curand_uniform(&states[index]);
+        if (x * x + y * y <= 1.0f)
+        {
+            partial_count[tid]++;
         }
-        atomicAdd(count, block_count);
+    }
+    __syncthreads();
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+        {
+            partial_count[tid] += partial_count[tid + s];
+        }
+        __syncthreads();
+    }
+    if (tid == 0)
+    {
+        atomicAdd(count, partial_count[0]);
     }
 }
 
-double serial_monte_carlo(const int iterations) {
-    double x, y, distance_squared, pi_estimate;
-    int in_circle = 0;
-    for (int i = 0; i < iterations; ++i) {
-        x = (double)rand() / RAND_MAX;
-        y = (double)rand() / RAND_MAX;
-        distance_squared = x * x + y * y;
-        if (distance_squared <= 1.0) {
-            ++in_circle;
-        }
-    }
-    pi_estimate = 4 * in_circle / ((double)iterations);
-    return pi_estimate;
+__global__ void setup_curand(curandState* state, unsigned long seed)
+{
+    int id = threadIdx.x + blockIdx.x * blockDim.x;
+    curand_init(seed, id, 0, &state[id]);
 }
 
-int main(int argc, char** argv) {
-    int iterations = 100000000;
-    int count = 0, * d_count;
-    curandState* d_state;
+void pi_serial() {
+    float x, y, count = 0;
+    clock_t start, end;
+    double executionTime;
 
-    // Serial Monte Carlo
-    clock_t serial_start = clock();
-    double pi_serial = serial_monte_carlo(iterations);
-    clock_t serial_end = clock();
+    start = clock();
 
-    // Parallel Monte Carlo
-    cudaMalloc(&d_count, sizeof(int));
-    cudaMalloc(&d_state, BLOCK_SIZE * gridDim.x * sizeof(curandState));
-    cudaMemcpy(d_count, &count, sizeof(int), cudaMemcpyHostToDevice);
-
-    dim3 dimBlock(BLOCK_SIZE);
-    dim3 dimGrid(4096);  // 4096 blocks of 256 threads each
-
-    cudaEvent_t parallel_start, parallel_stop;
-    cudaEventCreate(&parallel_start);
-    cudaEventCreate(&parallel_stop);
-
-    cudaEventRecord(parallel_start);
-    for (int i = 0; i < dimGrid.x; i++) {
-        cuda_monte_carlo << < dimGrid, dimBlock >> > (d_count, d_state, dimBlock, dimGrid, i);
-
+    for (int i = 0; i < ITERATIONS; i++)
+    {
+        x = (float)rand() / RAND_MAX;
+        y = (float)rand() / RAND_MAX;
+        if (x * x + y * y <= 1.0f)
+        {
+            count++;
+        }
     }
-    cudaMemcpy(&count, d_count, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaEventRecord(parallel_stop);
-    cudaEventSynchronize(parallel_stop);
+    
+    end = clock();
+    printf("Estimated value of pi with serial processing: %f\n", 4.0f * count / ITERATIONS);
+    executionTime = ((double)(end - start)) *1000 / CLOCKS_PER_SEC;
+    printf("Time elapsed: %.2f ms \n", executionTime);
+}
+
+
+int main()
+{
+    float* count_device;
+    float* count_host;
+    curandState* states_device;
+    int blocks_per_grid = (ITERATIONS + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int seed = time(NULL);
+
+    //serial execution
+    pi_serial();
+
+    //Cuda execution
+    cudaMalloc((void**)&count_device, sizeof(float));
+    cudaMalloc((void**)&states_device, blocks_per_grid * BLOCK_SIZE * sizeof(curandState));
+    setup_curand << <blocks_per_grid, BLOCK_SIZE >> > (states_device, seed);
+    count_host = (float*)malloc(sizeof(float));
+    *count_host = 0.0f;
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
+    calculate_pi <<< blocks_per_grid, BLOCK_SIZE >>> (count_device, states_device);
+    cudaMemcpy(count_host, count_device, sizeof(float), cudaMemcpyDeviceToHost);
+
+    printf("Estimated value of pi using CUDA processing: %f\n", 4.0f * (*count_host) / ITERATIONS);
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
     float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, parallel_start, parallel_stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Time elapsed: %f ms\n", milliseconds);
 
-    double pi_parallel = 4 * count / ((double)(iterations * dimGrid.x * BLOCK_SIZE));
-
-    printf("Serial estimate of pi = %f\n", pi_serial);
-    printf("Parallel estimate of pi = %f\n", pi_parallel);
-    printf("Time taken by serial code = %f seconds\n", ((double)(serial_end - serial_start)) / CLOCKS_PER_SEC);
-    printf("Time taken by parallel code = %f seconds\n", milliseconds / 1000);
-
-    cudaFree(d_count);
-    cudaFree(d_state);
+    cudaFree(count_device);
+    cudaFree(states_device);
+    free(count_host);
 
     return 0;
 }
