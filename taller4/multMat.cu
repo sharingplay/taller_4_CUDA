@@ -1,3 +1,4 @@
+/*
 #include <stdio.h>
 #include <cuda.h>
 
@@ -69,10 +70,10 @@ int main(int argc, char** argv) {
     cudaMemcpy(c, d_c, size, cudaMemcpyDeviceToHost);
 
     // Print result
-    printf("Result:\n");
+    printf(" Matriz Resultante:\n");
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
-            printf("%d ", c[i * N + j]);
+            printf(" %d ", c[i * N + j]);
         }
         printf("\n");
     }
@@ -87,3 +88,4 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+*/

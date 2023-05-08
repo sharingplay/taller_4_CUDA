@@ -5,7 +5,7 @@
 int* a, * b;  // host data
 int* c, * c2;  // results
 
-//Cuda error checking - non mandatory
+//Cuda error checking
 void cudaCheckError() {
     cudaError_t e = cudaGetLastError();
     if (e != cudaSuccess) {
