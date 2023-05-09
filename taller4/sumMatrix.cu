@@ -3,18 +3,19 @@
 #include <stdlib.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 
-#define N 10000
 
-// Función para inicializar la matriz con valores enteros aleatorios entre 0 y 10
+#define N 20000
+
 void init_matrix(int* matrix, int size) {
     srand((unsigned int)time(NULL));
     for (int i = 0; i < size; i++) {
-        matrix[i] = rand() % 11;
+        matrix[i] = rand() % 2;
     }
 }
 
-// Función para sumar los valores de la matriz de forma serial
+// Function to add values in a serial way
 int sum_matrix_serial(int* matrix, int size) {
     int sum = 0;
     for (int i = 0; i < size; i++) {
@@ -23,17 +24,16 @@ int sum_matrix_serial(int* matrix, int size) {
     return sum;
 }
 
-// Kernel para sumar los valores de la matriz de forma paralela
+// Kernel for adding values in parallel 
 __global__ void sum_matrix_parallel(int* matrix, int* sum) {
     __shared__ int partial_sum[1024];
 
     int tid = threadIdx.x;
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // Cada hilo sumará un valor de la matriz
     partial_sum[tid] = (i < N * N) ? matrix[i] : 0;
 
-    // Sincronización de hilos para evitar condiciones de carrera
+    // Threads syncronization
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
         __syncthreads();
         if (tid < s) {
@@ -41,7 +41,7 @@ __global__ void sum_matrix_parallel(int* matrix, int* sum) {
         }
     }
 
-    // Solo el primer hilo de cada bloque sumará los valores parciales
+    // Just the 1st thread of the blocks will add
     if (tid == 0) {
         atomicAdd(sum, partial_sum[0]);
     }
@@ -90,15 +90,16 @@ int main(int argc, char** argv) {
 
     // Copy sum from device to host
     int sum_parallel; // Cambiado a int
-    cudaMemcpy(&sum_parallel, d_sum, sizeof(int), cudaMemcpyDeviceToHost); // Cambiado a sizeof(int)
+    cudaMemcpy(&sum_parallel, d_sum, sizeof(int), cudaMemcpyDeviceToHost);
 
     //Time computing
     double serial_time = (double)(serial_end - serial_start) / CLOCKS_PER_SEC;
     double cuda_time = (double)(cuda_end - cuda_start) / CLOCKS_PER_SEC;
 
     // Print results
-    printf("Suma serial: %d\nCPU time = %f\n", sum_serial, serial_time); // Cambiado a %d
-    printf("Suma paralela: %d\nGPU time = %f\n", sum_parallel, cuda_time); // Cambiado a %d
+    printf("N: %d\n", N);
+    printf("Suma serial: %d, CPU time = %f\n", sum_serial, serial_time); 
+    printf("Suma paralela: %d, GPU time = %f\n", sum_parallel, cuda_time); 
 
     return 0;
 }

@@ -82,7 +82,7 @@
   <ItemGroup>
     <CudaCompile Include="kernel.cu" />
     <CudaCompile Include="multMat.cu" />
-    <CudaCompile Include="restMatrix.cu" />
+    <CudaCompile Include="sumMatrix.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
