@@ -3,109 +3,105 @@
 #include <time.h>
 #include <curand.h>
 #include <curand_kernel.h>
+#include <opencv2>
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 
-#define ITERATIONS 100000000
-#define BLOCK_SIZE 1024
+using namespace cv;
+using namespace std;
 
-__global__ void calculate_pi(float* count, curandState* states)
+__global__ void sobelFilter(unsigned char* inputImage, unsigned char* outputImage, int width, int height)
 {
-    __shared__ float partial_count[BLOCK_SIZE];
-    float x, y;
-    int tid = threadIdx.x;
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    curand_init(clock64(), index, 0, &states[index]);
-    partial_count[tid] = 0.0f;
-    for (int i = threadIdx.x; i < ITERATIONS; i += blockDim.x * gridDim.x)
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < height && col < width)
     {
-        x = curand_uniform(&states[index]);
-        y = curand_uniform(&states[index]);
-        if (x * x + y * y <= 1.0f)
+        int index = row * width + col;
+
+        int gx = 0, gy = 0;
+
+        if (row > 0 && row < height - 1 && col > 0 && col < width - 1)
         {
-            partial_count[tid]++;
+            gx = inputImage[(row - 1) * width + col - 1] - inputImage[(row - 1) * width + col + 1] +
+                2 * (inputImage[row * width + col - 1] - inputImage[row * width + col + 1]) +
+                inputImage[(row + 1) * width + col - 1] - inputImage[(row + 1) * width + col + 1];
+
+            gy = inputImage[(row - 1) * width + col - 1] + 2 * inputImage[(row - 1) * width + col] +
+                inputImage[(row - 1) * width + col + 1] - inputImage[(row + 1) * width + col - 1] -
+                2 * inputImage[(row + 1) * width + col] - inputImage[(row + 1) * width + col + 1];
         }
-    }
-    __syncthreads();
-    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
-    {
-        if (tid < s)
+
+        int magnitude = sqrt(gx * gx + gy * gy);
+
+        if (magnitude > 255)
         {
-            partial_count[tid] += partial_count[tid + s];
+            magnitude = 255;
         }
-        __syncthreads();
-    }
-    if (tid == 0)
-    {
-        atomicAdd(count, partial_count[0]);
+
+        outputImage[index] = (unsigned char)magnitude;
     }
 }
 
-__global__ void setup_curand(curandState* state, unsigned long seed)
+int main(int argc, char** argv)
 {
-    int id = threadIdx.x + blockIdx.x * blockDim.x;
-    curand_init(seed, id, 0, &state[id]);
-}
-
-void pi_serial() {
-    float x, y, count = 0;
-    clock_t start, end;
-    double executionTime;
-
-    start = clock();
-
-    for (int i = 0; i < ITERATIONS; i++)
+    if (argc < 2)
     {
-        x = (float)rand() / RAND_MAX;
-        y = (float)rand() / RAND_MAX;
-        if (x * x + y * y <= 1.0f)
-        {
-            count++;
-        }
+        cout << "No image specified!" << endl;
+        return -1;
     }
-    
-    end = clock();
-    printf("Estimated value of pi with serial processing: %f\n", 4.0f * count / ITERATIONS);
-    executionTime = ((double)(end - start)) *1000 / CLOCKS_PER_SEC;
-    printf("Time elapsed: %.2f ms \n", executionTime);
-}
 
+    string filename = argv[1];
+    Mat inputImage = imread(filename, IMREAD_GRAYSCALE);
+    if (inputImage.empty())
+    {
+        cout << "Unable to open image file: " << filename << endl;
+        return -1;
+    }
 
-int main()
-{
-    float* count_device;
-    float* count_host;
-    curandState* states_device;
-    int blocks_per_grid = (ITERATIONS + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    int seed = time(NULL);
+    int width = inputImage.cols;
+    int height = inputImage.rows;
 
-    //serial execution
-    pi_serial();
+    Size imageSize = inputImage.size();
+    Mat outputImage(imageSize, CV_8UC1);
 
-    //Cuda execution
-    cudaMalloc((void**)&count_device, sizeof(float));
-    cudaMalloc((void**)&states_device, blocks_per_grid * BLOCK_SIZE * sizeof(curandState));
-    setup_curand << <blocks_per_grid, BLOCK_SIZE >> > (states_device, seed);
-    count_host = (float*)malloc(sizeof(float));
-    *count_host = 0.0f;
+    int imageSizeBytes = width * height * sizeof(unsigned char);
+
+    unsigned char* d_inputImage = NULL;
+    unsigned char* d_outputImage = NULL;
+
+    cudaMalloc((void**)&d_inputImage, imageSizeBytes);
+    cudaMalloc((void**)&d_outputImage, imageSizeBytes);
+
+    cudaMemcpy(d_inputImage, inputImage.data, imageSizeBytes, cudaMemcpyHostToDevice);
+
+    dim3 blockSize(32, 32);
+    dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
 
-    calculate_pi <<< blocks_per_grid, BLOCK_SIZE >>> (count_device, states_device);
-    cudaMemcpy(count_host, count_device, sizeof(float), cudaMemcpyDeviceToHost);
-
-    printf("Estimated value of pi using CUDA processing: %f\n", 4.0f * (*count_host) / ITERATIONS);
+    sobelFilter << <gridSize, blockSize >> > (d_inputImage, d_outputImage, width, height);
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Time elapsed: %f ms\n", milliseconds);
 
-    cudaFree(count_device);
-    cudaFree(states_device);
-    free(count_host);
+    printf("Time elapsed: %.2f ms \n", milliseconds);
+
+    // Save output image
+    imwrite("output.jpg", output_image);
+
+    // Free memory
+    cudaFree(d_input_image);
+    cudaFree(d_output_image);
+    free(h_input_image.data);
+    free(h_output_image.data);
 
     return 0;
 }
