@@ -4,8 +4,8 @@ AdditionalCompilerOptions=
 AdditionalDependencies=
 AdditionalDeps=
 AdditionalLibraryDirectories=
-AdditionalOptions=-arch=sm_61
-AdditionalOptions=-arch=sm_61
+AdditionalOptions=
+AdditionalOptions=
 CodeGeneration=compute_52,sm_52
 CodeGeneration=compute_52,sm_52
 CompileOut=C:\Users\Mario\Desktop\taller_4_CUDA\taller4\x64\Debug\kernel.cu.obj

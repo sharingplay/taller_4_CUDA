@@ -95,5 +95,4 @@ int main(int argc, char** argv)
     cudaFree(b_d);
     cudaFree(c_d);
     return 0;
-}
-*/
+}*/

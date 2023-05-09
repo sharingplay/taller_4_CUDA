@@ -87,5 +87,4 @@ int main(int argc, char** argv) {
     cudaFree(d_c);
 
     return 0;
-}
-*/
+}*/
